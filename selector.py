@@ -25,13 +25,16 @@ def get_llm_config() -> Dict[str, str]:
 
 def split_transcript_into_chunks(
     segments: List[Dict[str, Any]],
-    chunk_char_target: int = 10000
+    chunk_char_target: int = 7000,
+    overlap_seconds: float = 60.0
 ) -> List[Dict[str, Any]]:
     """
-    Splits transcript into chunks of ~10k characters.
-    Each line formatted as '[start_seconds] text'.
-    Returns list of chunk objects with formatted text and relevant segment range.
+    Splits transcript into chunks with generous overlap (default: 60s)
+    so candidate clips spanning chunk boundaries are never missed.
     """
+    if not segments:
+        return []
+
     chunks = []
     current_lines = []
     current_len = 0
@@ -44,11 +47,23 @@ def split_transcript_into_chunks(
         if current_len + line_len > chunk_char_target and current_lines:
             chunks.append({
                 "text": "".join(current_lines),
-                "segments": current_segments
+                "segments": list(current_segments)
             })
-            current_lines = [line]
-            current_len = line_len
-            current_segments = [seg]
+
+            # Retain trailing segments within overlap_seconds for the next chunk
+            last_end = current_segments[-1]["end"] if current_segments else 0.0
+            overlap_cutoff = max(0.0, last_end - overlap_seconds)
+            overlap_segs = [s for s in current_segments if s["end"] >= overlap_cutoff]
+            if len(overlap_segs) >= len(current_segments):
+                overlap_segs = overlap_segs[len(overlap_segs) // 2 :]
+
+            current_segments = list(overlap_segs)
+            current_lines = [f"[{s['start']:.1f}] {s['text']}\n" for s in current_segments]
+            current_len = sum(len(l) for l in current_lines)
+
+            current_lines.append(line)
+            current_len += line_len
+            current_segments.append(seg)
         else:
             current_lines.append(line)
             current_len += line_len
@@ -57,7 +72,7 @@ def split_transcript_into_chunks(
     if current_lines:
         chunks.append({
             "text": "".join(current_lines),
-            "segments": current_segments
+            "segments": list(current_segments)
         })
 
     return chunks
@@ -80,7 +95,7 @@ def extract_json_array(text: str) -> Optional[List[Dict[str, Any]]]:
     if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
         candidate_json = cleaned[start_idx : end_idx + 1]
         try:
-            parsed = json.load_s_or_eval = json.loads(candidate_json)
+            parsed = json.loads(candidate_json)
             if isinstance(parsed, list):
                 return parsed
         except Exception:
@@ -188,15 +203,17 @@ def select_clip_candidates(
     cands_per_chunk = max(5, int((num_clips * 1.5) / max(1, len(chunks))) + 2)
 
     system_prompt = (
-        "You are an expert viral video editor and content strategist. "
-        "Your task is to identify the best vertical short-form clip candidates (Reels, TikTok, Shorts) from the transcript. "
-        "Score each candidate from 1 to 10 strictly based on:\n"
-        "1. Strong hook in the first 2 seconds that immediately captures curiosity or interest.\n"
-        "2. Complete thought with a clear payoff, insight, or punchline.\n"
-        "3. High emotion, surprise, or high-value information.\n"
-        "4. Standalone sense without needing extra background context.\n"
-        f"CRITICAL: Each clip MUST have a duration (end - start) between {min_duration} and {max_duration} seconds.\n"
-        "You must respond ONLY with a raw JSON array of objects. Do not include markdown codeblocks or preamble."
+        "You are an elite YouTube Shorts & TikTok content strategist and viral video editor. "
+        "Your goal is to identify high-retention vertical clips from the transcript.\n\n"
+        "STRICT SCORING CALIBRATION RUBRIC (Do NOT inflate scores! Use the full 1-10 scale):\n"
+        "• 9.0 - 10.0 (VIRAL MASTERPIECE): Explosive curiosity hook in the first 1.5 seconds, dramatic tension, completely self-contained, punchy emotional or comedic payoff. (Award sparingly! Max ~15% of clips).\n"
+        "• 7.5 - 8.9 (STRONG CLIP): Clear compelling hook, coherent self-contained story/insight, solid payoff.\n"
+        "• 6.0 - 7.4 (AVERAGE / PASSABLE): Moderately interesting topic, but slow initial hook (>3s to get interesting) or weak ending.\n"
+        "• 1.0 - 5.9 (WEAK / SKIP): Incomplete thought, requires prior context, rambling, or dull delivery.\n\n"
+        "CRITICAL RULES:\n"
+        f"1. Duration MUST be strictly between {min_duration} and {max_duration} seconds (end - start >= {min_duration}s).\n"
+        "2. The 'hook' field MUST be a punchy 3-8 word viewer-facing headline/caption (e.g. 'He spent $500,000 on THIS?!') to be burned onto the video.\n"
+        "3. Respond ONLY with a raw JSON array. Do not include markdown codeblocks or preamble."
     )
 
     all_raw_candidates: List[Dict[str, Any]] = []
@@ -206,12 +223,20 @@ def select_clip_candidates(
         prompt = (
             f"Here is transcript chunk #{i + 1} with [start_seconds] timestamps:\n\n"
             f"{chunk['text']}\n\n"
-            f"Identify {cands_per_chunk} top clip candidates. "
-            f"Each candidate MUST be between {min_duration} and {max_duration} seconds long (end - start >= {min_duration}s). "
-            "Do NOT return short 5-10 second snippets. Pick complete full scenes.\n"
-            "Return ONLY a JSON list with this schema:\n"
+            f"Identify {cands_per_chunk} candidates. Evaluate each rigorously.\n"
+            f"Each candidate MUST be between {min_duration} and {max_duration} seconds long.\n"
+            "Return ONLY a JSON array with this schema:\n"
             "[\n"
-            '  {"start": 12.5, "end": 45.0, "score": 9, "title": "Catchy Title", "hook": "First 2-second hook"}\n'
+            '  {\n'
+            '    "start": 12.5,\n'
+            '    "end": 45.0,\n'
+            '    "hook_score": 8.5,\n'
+            '    "story_score": 8.0,\n'
+            '    "payoff_score": 9.0,\n'
+            '    "score": 8.5,\n'
+            '    "title": "Short Catchy YouTube Title",\n'
+            '    "hook": "Punchy 3-8 Word Video Headline"\n'
+            '  }\n'
             "]"
         )
 
@@ -234,7 +259,12 @@ def select_clip_candidates(
                 try:
                     raw_start = float(cand["start"])
                     raw_end = float(cand["end"])
-                    score = float(cand.get("score", 5))
+                    h_score = float(cand.get("hook_score", cand.get("score", 6.0)))
+                    s_score = float(cand.get("story_score", cand.get("score", 6.0)))
+                    p_score = float(cand.get("payoff_score", cand.get("score", 6.0)))
+                    # Calibrate score using weighted formula
+                    calibrated_score = round(0.4 * h_score + 0.3 * s_score + 0.3 * p_score, 1)
+
                     title = str(cand.get("title", "Untitled Clip")).strip()
                     hook = str(cand.get("hook", "")).strip()
 
@@ -243,7 +273,10 @@ def select_clip_candidates(
                     all_raw_candidates.append({
                         "start": snapped_start,
                         "end": snapped_end,
-                        "score": score,
+                        "hook_score": h_score,
+                        "story_score": s_score,
+                        "payoff_score": p_score,
+                        "score": calibrated_score,
                         "title": title,
                         "hook": hook
                     })
@@ -251,7 +284,20 @@ def select_clip_candidates(
                     print(f"[Selector] Skipping invalid candidate item: {cand_err}")
 
         except Exception as e:
-            print(f"[Selector] Error in stage 2 (chunk {i+1}): {e}. Skipping chunk.")
+            print(f"[Selector] Error in stage 3 (chunk {i+1}): {e}. Skipping chunk.")
 
-    print(f"[Selector] Extracted {len(all_raw_candidates)} total candidate(s) from all chunks.")
-    return all_raw_candidates
+    # Deduplicate candidates across overlapping chunks (|start1 - start2| <= 3.5s)
+    deduped_candidates: List[Dict[str, Any]] = []
+    # Sort by score descending so higher scoring duplicates are preferred
+    all_raw_candidates.sort(key=lambda c: c.get("score", 0), reverse=True)
+    for c in all_raw_candidates:
+        is_dup = False
+        for kept in deduped_candidates:
+            if abs(c["start"] - kept["start"]) <= 3.5:
+                is_dup = True
+                break
+        if not is_dup:
+            deduped_candidates.append(c)
+
+    print(f"[Selector] Extracted {len(all_raw_candidates)} total candidates ({len(deduped_candidates)} unique non-duplicates across chunks).")
+    return deduped_candidates

@@ -341,6 +341,12 @@ def main():
         default="22",
         help="YouTube video category ID (default: 22 - People & Blogs)"
     )
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=None,
+        help="Minimum clip score required to upload (e.g. 7.5 or 8.0). Drops lower-rated clips from upload plan."
+    )
 
     args = parser.parse_args()
 
@@ -396,8 +402,21 @@ def main():
 
     print(f"\nTotal clips: {len(clips)} | Already posted: {already_posted_count} | Remaining: {len(unposted_clips)}")
 
+    # Apply quality filter if --min-score is specified
+    if args.min_score is not None:
+        filtered_by_score = []
+        for c in unposted_clips:
+            score = float(c.get("score", 0.0))
+            if score >= args.min_score:
+                filtered_by_score.append(c)
+            else:
+                print(f"[Quality Gate] Skipping '{c.get('title')}' (score {score:.1f} < threshold {args.min_score:.1f})")
+        dropped_count = len(unposted_clips) - len(filtered_by_score)
+        unposted_clips = filtered_by_score
+        print(f"Quality filter (--min-score {args.min_score:.1f}): Kept {len(unposted_clips)}, Dropped {dropped_count} low-scoring clip(s).")
+
     if not unposted_clips:
-        print("✅ All clips have already been posted! Nothing to upload.")
+        print("✅ No remaining clips meet the upload criteria or all clips have already been posted! Nothing to upload.")
         sys.exit(0)
 
     # 4. Round-Robin Distribution & per-channel limits

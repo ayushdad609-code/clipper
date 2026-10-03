@@ -32,6 +32,12 @@ python clip.py "https://www.youtube.com/watch?v=VIDEO_ID" \
   --max 45 \
   --section 10:00-25:00
 
+# Generate vertical clips with blurred backdrop framing (default, keeps all speakers visible)
+python clip.py "https://www.youtube.com/watch?v=VIDEO_ID" --framing blur
+
+# Generate vertical clips with exact center crop
+python clip.py "https://www.youtube.com/watch?v=VIDEO_ID" --framing center
+
 # Disable background music
 python clip.py "https://www.youtube.com/watch?v=VIDEO_ID" --no-music
 ```
@@ -48,7 +54,10 @@ python yt_auth.py ayushdad --code "http://localhost/?code=4/0A..."
 ### 3. Publishing to YouTube Shorts
 ```bash
 # Dry-run preview (checks clips.json vs posted.json, plans uploads without API calls)
-python yt_post.py --dry-run
+python yt_post.py --dry-run --min-score 7.5
+
+# Upload only top-tier clips (score >= 8.0) as Private for creator review
+python yt_post.py --min-score 8.0 --privacy private
 
 # Upload as Public
 python yt_post.py --privacy public

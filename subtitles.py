@@ -1,6 +1,6 @@
 import os
 import subprocess
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 def check_subtitle_filter_support() -> bool:
     """Checks if ffmpeg supports subtitle burning via 'ass' or 'subtitles' filter."""
@@ -30,13 +30,13 @@ def generate_ass_subtitles(
     segments: List[Dict[str, Any]],
     output_ass_path: str,
     font_name: str = "DejaVu Sans",
-    font_size: int = 42
+    font_size: int = 42,
+    hook_title: Optional[str] = None
 ) -> str:
     """
     Builds an .ass subtitle file for the clip:
-    - Large bold white text, black outline
-    - Centered in lower third
-    - 3-5 words at a time
+    - Large bold white text, black outline centered in lower third (3-5 words at a time)
+    - Animated top hook banner (first 3.5s) to hook viewers immediately
     """
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -47,11 +47,19 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,30,30,180,1
+Style: HookBanner,{font_name},44,&H0000FFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,4,3,8,30,30,120,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
+
+    # Insert top hook headline for the first 3.5 seconds
+    if hook_title and hook_title.strip():
+        clean_hook = hook_title.strip().replace("\n", " ")
+        if len(clean_hook) > 50:
+            clean_hook = clean_hook[:47] + "..."
+        events.append(f"Dialogue: 1,0:00:00.00,0:00:03.50,HookBanner,,0,0,0,,{{\\fad(150,350)}}{clean_hook}")
 
     for seg in segments:
         seg_start = seg.get("start", 0.0)

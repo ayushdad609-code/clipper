@@ -76,6 +76,12 @@ def main():
         default=None,
         help="LLM base URL endpoint (default: from ~/clipper/.env)"
     )
+    parser.add_argument(
+        "--framing",
+        choices=["blur", "center"],
+        default="blur",
+        help="Framing layout: 'blur' (blurred backdrop, full widescreen visible) or 'center' (stable 9:16 center crop) (default: blur)"
+    )
 
     args = parser.parse_args()
 
@@ -154,7 +160,8 @@ def main():
             output_dir=args.output_dir,
             min_duration=args.min_duration,
             max_duration=args.max_duration,
-            num_clips=args.num_clips
+            num_clips=args.num_clips,
+            framing=args.framing
         )
         t_render = time.time() - t0
         print(f"Rendering complete in {t_render:.1f}s.")
