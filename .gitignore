@@ -1,0 +1,42 @@
+# Environment & Secrets (NEVER COMMIT)
+.env
+.env.*
+!.env.example
+*.json
+!clips.example.json
+yt/
+token.json
+client_secret.json
+cookies.txt
+*.cookies.txt
+.git-credentials
+
+# Python & Virtualenv
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Media & Temporary Files
+downloads/
+output/
+tmp/
+*.mp4
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.m4a
+!music/*.mp3
+!music/*.m4a
+*.ass
+*.log
+cron_publisher.log
+
+# System & Editor
+.DS_Store
+.vscode/
+.idea/

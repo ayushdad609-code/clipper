@@ -1,0 +1,11 @@
+# Core dependencies for Clipper
+yt-dlp>=2026.8.19
+faster-whisper>=1.2.1
+gdown>=6.4.1
+openai>=1.50.0
+python-dotenv>=1.0.0
+google-api-python-client>=2.140.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+requests>=2.32.0
+tqdm>=4.66.0
