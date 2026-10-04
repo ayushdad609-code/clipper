@@ -78,9 +78,9 @@ def main():
     )
     parser.add_argument(
         "--framing",
-        choices=["blur", "center"],
-        default="blur",
-        help="Framing layout: 'blur' (blurred backdrop, full widescreen visible) or 'center' (stable 9:16 center crop) (default: blur)"
+        choices=["auto", "blur", "center"],
+        default="auto",
+        help="Framing layout: 'auto' (face-following crop when face detected, blurred backdrop when no faces or faces far apart), 'blur' (blurred backdrop), or 'center' (stable 9:16 center crop) (default: auto)"
     )
 
     args = parser.parse_args()

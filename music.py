@@ -95,13 +95,16 @@ def add_background_music_to_clip(
     fade_start = max(0.0, clip_dur - 1.0)
 
     # Audio filter graph:
-    # 1. Lower music volume & fade out over last 1s
-    # 2. Sidechain compression: duck music when voice [0:a] is active
-    # 3. Mix voice [0:a] and ducked music [m_ducked]
+    # 1. Normalize voice to -14 LUFS before sidechain and mixing
+    # 2. Lower music volume & fade out over last 1s
+    # 3. Sidechain compression: duck music when voice is active
+    # 4. Mix voice and ducked music, with final -14 LUFS broadcast normalization
     filter_complex = (
+        f"[0:a]loudnorm=I=-14:LRA=11:TP=-1.5[v_norm];"
+        f"[v_norm]asplit=2[v_side][v_main];"
         f"[1:a]volume={music_volume:.2f},afade=t=out:st={fade_start:.2f}:d=1.0[m_fade];"
-        f"[m_fade][0:a]sidechaincompress=threshold=0.08:ratio=4:attack=15:release=250[m_ducked];"
-        f"[0:a][m_ducked]amix=inputs=2:duration=first:dropout_transition=0[aout]"
+        f"[m_fade][v_side]sidechaincompress=threshold=0.08:ratio=4:attack=15:release=250[m_ducked];"
+        f"[v_main][m_ducked]amix=inputs=2:duration=first:dropout_transition=0,loudnorm=I=-14:LRA=11:TP=-1.5[aout]"
     )
 
     cmd = [

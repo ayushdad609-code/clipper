@@ -54,12 +54,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
 
-    # Insert top hook headline for the first 3.5 seconds
+    # Insert top hook headline for the first 2.5 seconds
     if hook_title and hook_title.strip():
         clean_hook = hook_title.strip().replace("\n", " ")
         if len(clean_hook) > 50:
             clean_hook = clean_hook[:47] + "..."
-        events.append(f"Dialogue: 1,0:00:00.00,0:00:03.50,HookBanner,,0,0,0,,{{\\fad(150,350)}}{clean_hook}")
+        events.append(f"Dialogue: 1,0:00:00.00,0:00:02.50,HookBanner,,0,0,0,,{{\\fad(150,250)}}{clean_hook}")
 
     for seg in segments:
         seg_start = seg.get("start", 0.0)

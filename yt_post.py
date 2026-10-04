@@ -289,6 +289,127 @@ def upload_single_video(
     return True, video_id, None
 
 
+def handle_review(posted_path: str = DEFAULT_POSTED_FILE):
+    """Lists private uploads for review before publishing publicly."""
+    records = load_posted_records(posted_path)
+    private_clips = [r for r in records if r.get("privacy") == "private"]
+
+    print("=" * 70)
+    print("📋 CLIPPER: Private Uploads Pending Review")
+    print("=" * 70)
+    if not private_clips:
+        print("No private uploads found in upload log.")
+        print(f"Total uploads recorded in {posted_path}: {len(records)}.")
+        return
+
+    print(f"Found {len(private_clips)} private upload(s) pending review:\n")
+    for idx, r in enumerate(private_clips, start=1):
+        print(f"#{idx} 📺 Channel: [{r.get('channel')}] \"{r.get('channel_title', '')}\"")
+        print(f"   🎬 Title:      {r.get('title')}")
+        print(f"   🔗 Shorts URL: {r.get('youtube_url')}")
+        print(f"   🆔 Video ID:   {r.get('video_id')}")
+        print(f"   📅 Uploaded:   {r.get('posted_at')}")
+        print(f"   🔒 Status:     [Privacy: {r.get('privacy')}]")
+        print("-" * 70)
+
+    print("\n💡 HOW TO APPROVE AND PUBLISH:")
+    print("1. Review the shorts on YouTube Studio or via the links above.")
+    print("2. Create or edit approved.json with the approved video titles or IDs:")
+    print("   [")
+    if private_clips:
+        print(f'     "{private_clips[0].get("title", "")}"')
+    print("   ]")
+    print("3. Publish approved videos publicly:")
+    print("   python yt_post.py --publish-approved\n")
+
+
+def handle_publish_approved(
+    approved_path: str,
+    posted_path: str = DEFAULT_POSTED_FILE,
+    yt_dir: str = DEFAULT_YT_DIR
+):
+    """Publishes approved private clips listed in approved.json to Public."""
+    if not os.path.isfile(approved_path):
+        sys.exit(f"[Error] Approved file not found at: {approved_path}.\nCreate it with a JSON list of approved titles or video IDs.")
+
+    try:
+        with open(approved_path, "r", encoding="utf-8") as f:
+            approved_items = json.load(f)
+    except Exception as e:
+        sys.exit(f"[Error] Failed to read approved JSON from {approved_path}: {e}")
+
+    if not isinstance(approved_items, list) or not approved_items:
+        sys.exit(f"[Error] {approved_path} must contain a non-empty JSON list of titles or video IDs.")
+
+    approved_set = set()
+    for item in approved_items:
+        if isinstance(item, str):
+            approved_set.add(item.strip().lower())
+        elif isinstance(item, dict):
+            if "title" in item:
+                approved_set.add(str(item["title"]).strip().lower())
+            if "video_id" in item:
+                approved_set.add(str(item["video_id"]).strip().lower())
+            if "id" in item:
+                approved_set.add(str(item["id"]).strip().lower())
+
+    records = load_posted_records(posted_path)
+    private_clips = [r for r in records if r.get("privacy") == "private"]
+
+    matching = []
+    for r in private_clips:
+        t = r.get("title", "").strip().lower()
+        vid = r.get("video_id", "").strip().lower()
+        if t in approved_set or vid in approved_set:
+            matching.append(r)
+
+    if not matching:
+        print("[Publish Approved] No private clips matched the entries in approved.json.")
+        print(f"Private clips available: {[r.get('title') for r in private_clips]}")
+        return
+
+    print(f"[Publish Approved] Found {len(matching)} approved clip(s) to transition to PUBLIC.")
+    channels = load_channels(yt_dir, allow_unauthenticated=False)
+    published_count = 0
+
+    for r in matching:
+        ch_name = r.get("channel")
+        vid = r.get("video_id")
+        title = r.get("title")
+
+        if ch_name not in channels:
+            print(f"[Publish Approved] Warning: Channel '{ch_name}' not authenticated. Cannot update video {vid}.")
+            continue
+
+        yt = channels[ch_name].get("youtube")
+        if not yt:
+            print(f"[Publish Approved] Warning: YouTube client not available for '{ch_name}'.")
+            continue
+
+        print(f"Setting video '{title}' ({vid}) to PUBLIC on [{ch_name}]...")
+        try:
+            yt.videos().update(
+                part="status",
+                body={
+                    "id": vid,
+                    "status": {
+                        "privacyStatus": "public"
+                    }
+                }
+            ).execute()
+            r["privacy"] = "public"
+            published_count += 1
+            print(f"✅ Video is now PUBLIC: {r.get('youtube_url')}")
+        except Exception as e:
+            print(f"❌ Failed to set video {vid} to public: {e}")
+
+    # Save updated posted.json
+    with open(posted_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+
+    print(f"\n[Publish Approved] Successfully transitioned {published_count}/{len(matching)} clip(s) to Public.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Upload clips from ./output to YouTube channels using Data API v3."
@@ -297,6 +418,21 @@ def main():
         "--dry-run",
         action="store_true",
         help="Simulate plan and show what would be uploaded without making API calls"
+    )
+    parser.add_argument(
+        "--review",
+        action="store_true",
+        help="List all private uploads pending creator review"
+    )
+    parser.add_argument(
+        "--publish-approved",
+        action="store_true",
+        help="Publish approved private clips from approved.json to Public"
+    )
+    parser.add_argument(
+        "--approved-file",
+        default=os.path.expanduser("~/clipper/approved.json"),
+        help="Path to approved.json (default: ~/clipper/approved.json)"
     )
     parser.add_argument(
         "--privacy",
@@ -349,6 +485,22 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.review:
+        handle_review(args.posted_file)
+        sys.exit(0)
+
+    if args.publish_approved:
+        handle_publish_approved(args.approved_file, args.posted_file, args.yt_dir)
+        sys.exit(0)
+
+    # Protect public publishing
+    if args.privacy == "public":
+        sys.exit(
+            "[Error] Direct public publishing is blocked for channel quality control.\n"
+            "Clips must first be uploaded as Private, reviewed with --review, approved in approved.json, "
+            "and published with --publish-approved."
+        )
 
     print("=" * 70)
     print("🚀 CLIPPER: YouTube Shorts Auto-Publisher")

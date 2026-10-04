@@ -2,13 +2,18 @@
 .env
 .env.*
 !.env.example
-*.json
-!clips.example.json
 yt/
 token.json
+token*.json
+*token*.json
 client_secret.json
+client_secret*.json
 cookies.txt
 *.cookies.txt
+posted.json
+approved.json
+*.json
+!clips.example.json
 .git-credentials
 
 # Python & Virtualenv

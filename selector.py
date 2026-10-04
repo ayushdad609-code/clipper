@@ -300,4 +300,144 @@ def select_clip_candidates(
             deduped_candidates.append(c)
 
     print(f"[Selector] Extracted {len(all_raw_candidates)} total candidates ({len(deduped_candidates)} unique non-duplicates across chunks).")
-    return deduped_candidates
+
+    # Second LLM pass: re-score with strict rubric, penalize weak openers, and diversify topics
+    final_candidates = rescore_and_diversify_candidates(
+        candidates=deduped_candidates,
+        segments=segments,
+        num_clips=num_clips,
+        client=client,
+        model=config["model"]
+    )
+    return final_candidates
+
+WEAK_OPENERS = {"so", "and", "yeah", "yes", "but", "like", "well", "okay", "ok", "right", "uh", "um", "actually"}
+
+def get_candidate_opening_text(cand: Dict[str, Any], segments: List[Dict[str, Any]], word_limit: int = 12) -> str:
+    """Extracts the first few words spoken at the beginning of a candidate clip."""
+    words = []
+    c_start = cand["start"]
+    for s in segments:
+        if s["end"] <= c_start:
+            continue
+        if s["start"] > c_start + 8.0:
+            break
+        if "words" in s and s["words"]:
+            for w in s["words"]:
+                if w["start"] >= c_start - 0.1:
+                    words.append(w["word"].strip())
+                    if len(words) >= word_limit:
+                        break
+        else:
+            words.extend(s.get("text", "").split())
+        if len(words) >= word_limit:
+            break
+    return " ".join(words[:word_limit]).strip()
+
+def rescore_and_diversify_candidates(
+    candidates: List[Dict[str, Any]],
+    segments: List[Dict[str, Any]],
+    num_clips: int,
+    client: Any,
+    model: str
+) -> List[Dict[str, Any]]:
+    """
+    Second LLM Pass:
+    - Re-scores candidates using strict editorial rubric.
+    - Heavily penalizes weak connective openers ("so", "and", "yeah", "well", "like").
+    - Enforces diversity across topics so clips don't cover the same moment twice.
+    """
+    if not candidates:
+        return []
+
+    # Tag opening lines and check weak openers
+    eval_payload = []
+    for idx, c in enumerate(candidates, start=1):
+        opening = get_candidate_opening_text(c, segments)
+        c["_temp_id"] = idx
+        c["opening_text"] = opening
+
+        first_word = opening.split()[0].lower().strip(".,!?\"'()[]{}") if opening.split() else ""
+        has_weak = first_word in WEAK_OPENERS
+        c["weak_opener"] = has_weak
+
+        eval_payload.append({
+            "id": idx,
+            "title": c.get("title", ""),
+            "hook": c.get("hook", ""),
+            "duration": round(c["end"] - c["start"], 1),
+            "opening_line": opening,
+            "initial_score": c.get("score", 6.0)
+        })
+
+    system_prompt = (
+        "You are the Senior Editorial Director for viral YouTube Shorts and TikTok content.\n"
+        "Perform a RIGOROUS SECOND-PASS RE-SCORING of candidate clips.\n\n"
+        "STRICT RUBRIC:\n"
+        "1. PENALIZE WEAK OPENERS: Clips starting with connective/filler words ('so', 'and', 'yeah', 'but', 'well', 'like', 'you know') "
+        "ruin viewer retention in the feed. Penalize them by at least -1.5 to -3.0 points from initial_score.\n"
+        "2. STANDALONE PAYOFF: Standalone, punchy self-contained stories with instant curiosity score highest (8.0 - 9.5).\n"
+        "3. TOPIC DIVERSITY: Assign a 1-3 word 'topic' to each clip so different topics can be selected.\n"
+        "Return ONLY a JSON array with schema: [{\"id\": 1, \"adjusted_score\": 8.5, \"topic\": \"Topic Name\", \"penalty_applied\": 0.0}]"
+    )
+
+    prompt = (
+        f"Re-score these {len(eval_payload)} candidates. Penalize weak openers and assign a topic:\n"
+        f"{json.dumps(eval_payload, indent=2)}\n\n"
+        "Return ONLY the raw JSON array."
+    )
+
+    print(f"[Selector] Running Second-Pass LLM re-scoring & diversity filter on {len(candidates)} candidates...")
+    try:
+        content = call_llm_with_retry(prompt, system_prompt, client, model)
+        parsed = extract_json_array(content)
+        if parsed and isinstance(parsed, list):
+            rescore_map = {item["id"]: item for item in parsed if isinstance(item, dict) and "id" in item}
+            for c in candidates:
+                tid = c.get("_temp_id")
+                if tid in rescore_map:
+                    rm = rescore_map[tid]
+                    c["score"] = round(float(rm.get("adjusted_score", c["score"])), 1)
+                    c["topic"] = str(rm.get("topic", "General")).strip()
+            print("[Selector] Second-pass re-scoring completed successfully.")
+        else:
+            print("[Selector] Warning: Could not parse second-pass JSON. Applying rule-based penalty fallback.")
+            for c in candidates:
+                if c.get("weak_opener"):
+                    c["score"] = round(max(1.0, c.get("score", 6.0) - 2.0), 1)
+    except Exception as e:
+        print(f"[Selector] Second-pass LLM call notice ({e}). Applying rule-based opener penalty fallback.")
+        for c in candidates:
+            if c.get("weak_opener"):
+                c["score"] = round(max(1.0, c.get("score", 6.0) - 2.0), 1)
+
+    # Clean temporary keys
+    for c in candidates:
+        c.pop("_temp_id", None)
+
+    # Sort by score descending
+    candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    # Select with topic diversity
+    diversified: List[Dict[str, Any]] = []
+    seen_topics = set()
+    target_count = max(num_clips * 2, 6)
+
+    # First pass: pick best scoring per unique topic
+    for c in candidates:
+        top = c.get("topic", "").strip().lower()
+        if top and top not in seen_topics:
+            diversified.append(c)
+            seen_topics.add(top)
+            if len(diversified) >= target_count:
+                break
+
+    # Second pass: fill remaining slots with highest scoring remaining
+    for c in candidates:
+        if c not in diversified:
+            diversified.append(c)
+            if len(diversified) >= target_count:
+                break
+
+    print(f"[Selector] Final selection: {len(diversified)} diverse, re-scored candidate(s).")
+    return diversified
